@@ -197,19 +197,19 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
         }
     } else if (cmd == "LREM") {
         if (tokens.size() < 4) 
-            response << "-Error: LREM requires key, count and value\r\n";
+            response << "-ERROR: LREM requires key, count and value\r\n";
         else {
             try {
                 int count = std::stoi(tokens[2]);
                 int removed = db.lrem(tokens[1], count, tokens[3]);
                 response << ":" << std::to_string(removed) << "\r\n";
             } catch (const std::exception&) {
-                response << "-Error: Invalid count\r\n";
+                response << "-ERROR: Invalid count\r\n";
             }
         }
     } else if (cmd == "LINDEX") {
         if (tokens.size() < 3) 
-            response << "-Error: LINDEX requires key and index\r\n";
+            response << "-ERROR: LINDEX requires key and index\r\n";
         else {
             try {
                 int index = std::stoi(tokens[2]);
@@ -219,24 +219,106 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
                 else 
                     response << "$-1\r\n";
             } catch (const std::exception&) {
-                return "-Error: Invalid index\r\n";
+                return "-ERROR: Invalid index\r\n";
             }
         }
     } else if (cmd == "LSET") {
         if (tokens.size() < 4) 
-            resonse << "-Error: LEST requires key, index and value\r\n";
+            resonse << "-ERROR: LEST requires key, index and value\r\n";
         else {
             try {
                 int index = std::stoi(tokens[2]);
                 if (db.lset(tokens[1], index, tokens[3]))
                     response << "+OK\r\n";
                 else 
-                    response << "-Error: Index out of range\r\n";
+                    response << "-ERROR: Index out of range\r\n";
             } catch (const std::exception&) {
-                response << "-Error: Invalid index\r\n";
+                response << "-ERROR: Invalid index\r\n";
             }
         }
+    } else if (cmd == "HSET") {
+        if(tokens.size() < 4) {
+            response << "-ERROR: HSET requires key, field and value\r\n";
+        } else {
+            db.hset(tokens[1], tokens[2], tokens[3]);
+            response << ":1\r\n";
+        }
+    } else if (cmd == "HGET") {
+        if(tokens.size() < 3) {
+            response << "-ERROR: HGET requires key and field\r\n";
+        } else {
+            std::string value;
+            if(db.hget(tokens[1], tokens[2], value)) {
+                response << "$" << value.size() << "\r\n" <<  value << "\r\n";
+            } else {
+                response <<"-1\r\n";
+            }
+        }
+    } else if (cmd == "HEXISTS")  {
+        if(tokens.size() < 3) {
+            response << "-ERROR: HEXISTS requires key and field\r\n";
+        } else {
+            bool exists = db.hexists(tokens[1], tokens[2]);
+            response << ":" << std::to_string(exists ? 1 : 0) << "\r\n";
+        }
+    } else if (cmd == "HDEL") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: HDEL requires key and field\r\n";
+        } else {
+            bool res = db.hdel(tokens[1], tokens[2]);
+            response << ":" << std::to_string(res ? 1 : 0) << "\r\n";
+        }
+    } else if (cmd == "HGETALL") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: HGETALL requires a key\r\n";
+        } else {
+            auto hash = db.hgetall(tokens[1]);
+            response << "*" << hash.size() * 2 << "\r\n";
+            for(const auto& pair : hash) {
+                response << "$" << pair.first.size() << "\r\n" << pair.first << "\r\n";
+                response << "$" << pair.second.size() << "\r\n" << pair.second << "\r\n";
+            }
+        }
+    } else if (cmd == "HKEYS") {
+        if(tokens.size() < 2) {
+            response << "-ERROR: HKEYS requires a key\r\n";
+        } else {
+            auto keys = db.hkeys(tokens[1]);
+            response << "*" << keys.size() << "\r\n";
+            for(const auto& key : keys) {
+                response << "$" << key.size() << "\r\n" << key << "\r\n";
+            }
+        }
+    } else if (cmd == "HVALS") {
+        if(tokens.size() < 2) {
+            response << "-ERROR: HVALS requires a key\r\n";
+        } else {
+            auto vals = db.hvals(tokens[1]);
+            response << "*" << vals.size() << "\r\n";
+            for(const auto& val : vals) {
+                response << "$" << val.size() << "\r\n" << val << "\r\n";
+            }
+        }
+    } else if (cmd == "HLEN") {
+        if(tokens.size() < 2) {
+            response << "-ERROR: HLEN requires a key\r\n";
+        } else {
+            size_t len = db.hlen(tokens[1]);
+            response << ":" << std::to_string(len) << "\r\n";
+        }
+    } else if (cmd == "HMSET") {
+        if (tokens.size() < 4 || (tokens.size()%2 == 1)) {
+            response << "-ERROR: HMSET requires a key followed by field value pairs\r\n";
+        } else {
+            std::vector<std::pair<std::string, std::string>> fieldValues;
+            for(size_t i = 2; i < tokens.size(); i += 2) {
+                fieldValues.emplace_back({tokens[i], tokens[i+1]});
+            }
+            db.hmset(tokens[1], fieldValues);
+            response << "+OK\r\n";
+        }
     }
-    
+
+
     return response.str();
 }
