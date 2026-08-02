@@ -36,17 +36,21 @@ std::vector<std::string> parseRespCommand(const std::string &input) {
     int num_elements = std::stoi(input.substr(pos, crlf_pos - pos));
     pos = crlf_pos + 2;
 
-    for(int i = 0; i < num_elements; ++i) {
-        if(pos >= input.length() || input[pos]) break; // Invalid 
-        pos++;
-        crlf_pos = input.find("\r\n", pos);
-        if(crlf_pos == std::string::npos) break; // Invalid 
-        int string_len = std::stoi(input.substr(pos, crlf_pos - pos));
-        pos = crlf_pos + 2;
-        if(pos + string_len >= input.length()) break; //Invalid
-        std::string token = input.substr(pos, string_len);
-        tokens.push_back(token);
-        pos += string_len + 2;
+    try {
+        for(int i = 0; i < num_elements; ++i) {
+            if(pos >= input.length() || input[pos] != '$') break; // Invalid 
+            pos++;
+            crlf_pos = input.find("\r\n", pos);
+            if(crlf_pos == std::string::npos) break; // Invalid 
+            int string_len = std::stoi(input.substr(pos, crlf_pos - pos));
+            pos = crlf_pos + 2;
+            if(pos + string_len + 2 > input.length()) break; //Invalid
+            std::string token = input.substr(pos, string_len);
+            tokens.push_back(token);
+            pos += string_len + 2;
+        }
+    } catch (const std::exception&) {
+        // Return parsed tokens so far if exception occurred
     }
     return tokens;
 }
@@ -101,7 +105,7 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
         }
     } else if(cmd == "KEYS") {
         std::vector<std::string> keys = db.keys();
-        response << "*" << keys.size();
+        response << "*" << keys.size() << "\r\n";
         for(auto &key : keys) {
             response << "$" << key.size() << "\r\n" << key << "\r\n";
         }
@@ -143,7 +147,7 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
             response << "-ERROR: LGET requires a key\r\n";
         } else {
             std::vector<std::string>vals =  db.lget(tokens[1]);
-            response << "*" << vals.size();
+            response << "*" << vals.size() << "\r\n";
             for(auto &val : vals) {
                 response << "$" << val.size() << "\r\n" << val << "\r\n";
             }
@@ -160,7 +164,7 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
             response << "-ERROR: LPUSH requires key and value\r\n";
         } 
         for(size_t i = 2; i < tokens.size(); i++) {
-            db.lpush(tokens[1], toknes[i]);
+            db.lpush(tokens[1], tokens[i]);
         }
         ssize_t len = db.llen(tokens[1]);
         response << ":" << std::to_string(len) << "\r\n";
@@ -179,7 +183,7 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
         } else {
             std::string value;
             if(db.lpop(tokens[1], value)) {
-                response << "$" << std::to_string(value.size()) << "\r\n" << val <<"\r\n";
+                response << "$" << std::to_string(value.size()) << "\r\n" << value <<"\r\n";
             } else {
                 response << "$-1\r\n";
             }
@@ -190,7 +194,7 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
         } else {
             std::string value;
             if(db.rpop(tokens[1], value)) {
-                response << "$" << std::to_string(value.size()) << "\r\n" << val << "\r\n";
+                response << "$" << std::to_string(value.size()) << "\r\n" << value << "\r\n";
             } else {
                 response << "$-1\r\n";
             }
@@ -219,12 +223,12 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
                 else 
                     response << "$-1\r\n";
             } catch (const std::exception&) {
-                return "-ERROR: Invalid index\r\n";
+                response << "-ERROR: Invalid index\r\n";
             }
         }
     } else if (cmd == "LSET") {
         if (tokens.size() < 4) 
-            resonse << "-ERROR: LEST requires key, index and value\r\n";
+            response << "-ERROR: LSET requires key, index and value\r\n";
         else {
             try {
                 int index = std::stoi(tokens[2]);
@@ -251,7 +255,7 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
             if(db.hget(tokens[1], tokens[2], value)) {
                 response << "$" << value.size() << "\r\n" <<  value << "\r\n";
             } else {
-                response <<"-1\r\n";
+                response << "$-1\r\n";
             }
         }
     } else if (cmd == "HEXISTS")  {
@@ -317,8 +321,9 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
             db.hmset(tokens[1], fieldValues);
             response << "+OK\r\n";
         }
+    } else {
+        response << "-ERROR: Unknown command '" << cmd << "'\r\n";
     }
-
 
     return response.str();
 }

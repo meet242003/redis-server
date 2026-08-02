@@ -71,7 +71,7 @@ bool RedisDatabase::load(const std::string& filename) {
                 size_t separator_pos = hash_item.find(":");
                 if(separator_pos != std::string::npos) {
                     std::string temp_key = hash_item.substr(0, separator_pos);
-                    std::string temp_val = hash_item.substr(separator_pos);
+                    std::string temp_val = hash_item.substr(separator_pos + 1);
                     hash_val[temp_key] = temp_val;
                 }
             }
@@ -213,7 +213,7 @@ void RedisDatabase::rpush(const std::string& key, const std::string& value) {
     list_store[key].push_back(value);
 }
 
-bool RedisDatabase::lpop(const std::string& key, const std::string& value) {
+bool RedisDatabase::lpop(const std::string& key, std::string& value) {
     std::lock_guard<std::mutex> lock(db_mutex);
     auto it = list_store.find(key);
     if(it != list_store.end() && !it->second.empty()) {
@@ -224,7 +224,7 @@ bool RedisDatabase::lpop(const std::string& key, const std::string& value) {
     return false;
 }
 
-bool RedisDatabase::rpop(const std::string& key, const std::string& value) {
+bool RedisDatabase::rpop(const std::string& key, std::string& value) {
     std::lock_guard<std::mutex> lock(db_mutex);
     auto it = list_store.find(key);
     if(it != list_store.end() && !it->second.empty()) {
@@ -315,7 +315,7 @@ bool RedisDatabase::hset(const std::string& key, const std::string& field, const
     return true;
 }
 
-bool RedisDatabase::hget(const std::string& key, const std::string& field, const std::string& value) {
+bool RedisDatabase::hget(const std::string& key, const std::string& field, std::string& value) {
     std::lock_guard<std::mutex> lock(db_mutex);
     auto it = hash_store.find(key);
     if(it != hash_store.end()) {
@@ -328,7 +328,7 @@ bool RedisDatabase::hget(const std::string& key, const std::string& field, const
     return false;
 }
 
-bool RedisDatabase::hexists(const std::string& key, const std::string& value) {
+bool RedisDatabase::hexists(const std::string& key, const std::string& field) {
     std::lock_guard<std::mutex> lock(db_mutex);
     auto it = hash_store.find(key);
     if(it != hash_store.end()) {
