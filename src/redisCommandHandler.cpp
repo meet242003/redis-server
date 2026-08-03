@@ -103,6 +103,60 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
                 response << "$-1\r\n";
             }
         }
+    } else if (cmd == "INCR") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: INCR requires a key\r\n";
+        } else {
+            long long result = 0;
+            if (db.incr(tokens[1], result)) {
+                response << ":" << std::to_string(result) << "\r\n";
+            } else {
+                response << "-ERROR: value is not an integer or out of range\r\n";
+            }
+        }
+    } else if (cmd == "DECR") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: DECR requires a key\r\n";
+        } else {
+            long long result = 0;
+            if (db.decr(tokens[1], result)) {
+                response << ":" << std::to_string(result) << "\r\n";
+            } else {
+                response << "-ERROR: value is not an integer or out of range\r\n";
+            }
+        }
+    } else if (cmd == "INCRBY") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: INCRBY requires a key and an increment\r\n";
+        } else {
+            try {
+                long long inc = std::stoll(tokens[2]);
+                long long result = 0;
+                if (db.incrby(tokens[1], inc, result)) {
+                    response << ":" << std::to_string(result) << "\r\n";
+                } else {
+                    response << "-ERROR: value is not an integer or out of range\r\n";
+                }
+            } catch (const std::exception&) {
+                response << "-ERROR: value is not an integer or out of range\r\n";
+            }
+        }
+    } else if (cmd == "DECRBY") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: DECRBY requires a key and a decrement\r\n";
+        } else {
+            try {
+                long long dec = std::stoll(tokens[2]);
+                long long result = 0;
+                if (db.decrby(tokens[1], dec, result)) {
+                    response << ":" << std::to_string(result) << "\r\n";
+                } else {
+                    response << "-ERROR: value is not an integer or out of range\r\n";
+                }
+            } catch (const std::exception&) {
+                response << "-ERROR: value is not an integer or out of range\r\n";
+            }
+        }
     } else if(cmd == "KEYS") {
         std::vector<std::string> keys = db.keys();
         response << "*" << keys.size() << "\r\n";
@@ -128,10 +182,17 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
         } else {
             int seconds = std::stoi(tokens[2]);
             if (db.expire(tokens[1], seconds)) {
-                response << "+OK\r\n";
+                response << ":1\r\n";
             } else {
-                response << "-ERROR: key not found\r\n";
+                response << ":0\r\n";
             }
+        }
+    } else if (cmd == "TTL") {
+        if(tokens.size() < 2) {
+            response << "-ERROR: TTL requires a key\r\n";
+        } else {
+            int rem = db.ttl(tokens[1]);
+            response << ":" << std::to_string(rem) << "\r\n";
         }
     } else if (cmd == "RENAME") {
         if(tokens.size() < 3) {
@@ -320,6 +381,131 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
             }
             db.hmset(tokens[1], fieldValues);
             response << "+OK\r\n";
+        }
+    } else if (cmd == "SADD") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: SADD requires a key and at least one member\r\n";
+        } else {
+            std::vector<std::string> members(tokens.begin() + 2, tokens.end());
+            int added = db.sadd(tokens[1], members);
+            if (added == -1) {
+                response << "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+            } else {
+                response << ":" << added << "\r\n";
+            }
+        }
+    } else if (cmd == "SREM") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: SREM requires a key and at least one member\r\n";
+        } else {
+            std::vector<std::string> members(tokens.begin() + 2, tokens.end());
+            int removed = db.srem(tokens[1], members);
+            if (removed == -1) {
+                response << "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+            } else {
+                response << ":" << removed << "\r\n";
+            }
+        }
+    } else if (cmd == "SISMEMBER") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: SISMEMBER requires a key and a member\r\n";
+        } else {
+            bool isMember = db.sismember(tokens[1], tokens[2]);
+            response << ":" << (isMember ? 1 : 0) << "\r\n";
+        }
+    } else if (cmd == "SMEMBERS") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: SMEMBERS requires a key\r\n";
+        } else {
+            auto members = db.smembers(tokens[1]);
+            response << "*" << members.size() << "\r\n";
+            for (const auto& member : members) {
+                response << "$" << member.size() << "\r\n" << member << "\r\n";
+            }
+        }
+    } else if (cmd == "SCARD") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: SCARD requires a key\r\n";
+        } else {
+            size_t card = db.scard(tokens[1]);
+            response << ":" << card << "\r\n";
+        }
+    } else if (cmd == "ZADD") {
+        if (tokens.size() < 4 || (tokens.size() - 2) % 2 != 0) {
+            response << "-ERROR: ZADD requires a key and at least one score member pair\r\n";
+        } else {
+            std::vector<std::pair<double, std::string>> scoreMembers;
+            try {
+                for (size_t i = 2; i < tokens.size(); i += 2) {
+                    double score = std::stod(tokens[i]);
+                    scoreMembers.emplace_back(score, tokens[i + 1]);
+                }
+                int added = db.zadd(tokens[1], scoreMembers);
+                if (added == -1) {
+                    response << "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+                } else {
+                    response << ":" << added << "\r\n";
+                }
+            } catch (const std::exception&) {
+                response << "-ERROR: value is not a valid float\r\n";
+            }
+        }
+    } else if (cmd == "ZREM") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: ZREM requires a key and at least one member\r\n";
+        } else {
+            std::vector<std::string> members(tokens.begin() + 2, tokens.end());
+            int removed = db.zrem(tokens[1], members);
+            if (removed == -1) {
+                response << "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+            } else {
+                response << ":" << removed << "\r\n";
+            }
+        }
+    } else if (cmd == "ZRANGE") {
+        if (tokens.size() < 4) {
+            response << "-ERROR: ZRANGE requires a key, start, and stop\r\n";
+        } else {
+            try {
+                int start = std::stoi(tokens[2]);
+                int stop = std::stoi(tokens[3]);
+                bool withScores = false;
+                if (tokens.size() >= 5) {
+                    std::string opt = tokens[4];
+                    for (char& c : opt) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                    if (opt == "WITHSCORES") {
+                        withScores = true;
+                    }
+                }
+                auto range = db.zrange(tokens[1], start, stop, withScores);
+                response << "*" << range.size() << "\r\n";
+                for (const auto& item : range) {
+                    response << "$" << item.size() << "\r\n" << item << "\r\n";
+                }
+            } catch (const std::exception&) {
+                response << "-ERROR: value is not an integer or out of range\r\n";
+            }
+        }
+    } else if (cmd == "ZSCORE") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: ZSCORE requires a key and a member\r\n";
+        } else {
+            double score = 0.0;
+            if (db.zscore(tokens[1], tokens[2], score)) {
+                std::ostringstream oss;
+                oss << score;
+                std::string s = oss.str();
+                response << "$" << s.size() << "\r\n" << s << "\r\n";
+            } else {
+                response << "$-1\r\n";
+            }
+        }
+    } else if (cmd == "ZCARD") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: ZCARD requires a key\r\n";
+        } else {
+            size_t card = db.zcard(tokens[1]);
+            response << ":" << card << "\r\n";
         }
     } else {
         response << "-ERROR: Unknown command '" << cmd << "'\r\n";
