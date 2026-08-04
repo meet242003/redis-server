@@ -1,6 +1,7 @@
 #include "../include/redisServer.h"
 #include "../include/redisCommandHandler.h" 
 #include "../include/redisDatabase.h"
+#include "../include/redisPubSub.h"
 #include <sys/socket.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -9,8 +10,9 @@
 #include <vector>
 #include <signal.h>
 #include <fcntl.h>
+#include <poll.h>
 
-RedisServer *globalServer = nullptr;
+static RedisServer* globalServer = nullptr;
 
 void signalHandler(int signum) {
     if(globalServer) {
@@ -22,6 +24,9 @@ void signalHandler(int signum) {
 
 void RedisServer::setupSignalHandler() {
     signal(SIGINT, signalHandler);
+#ifdef SIGPIPE
+    signal(SIGPIPE, SIG_IGN);
+#endif
 }
 
 RedisServer::RedisServer(int port) : port(port), server_socket(-1), running(false) {
@@ -39,28 +44,19 @@ void RedisServer::shutdown() {
 
 void RedisServer::setNonBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) {
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    }
+    if (flags == -1) return;
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
 bool RedisServer::isCompleteCommand(const std::string& input, size_t& cmd_len) {
-    if (input.empty()) return false;
-
-    if (input[0] != '*') {
-        size_t newline_pos = input.find('\n');
-        if (newline_pos == std::string::npos) return false;
-        cmd_len = newline_pos + 1;
-        return true;
-    }
-
+    if (input.empty() || input[0] != '*') return false;
     size_t pos = 0;
     size_t crlf_pos = input.find("\r\n", pos);
     if (crlf_pos == std::string::npos) return false;
 
     int num_elements = 0;
     try {
-        num_elements = std::stoi(input.substr(1, crlf_pos - 1));
+        num_elements = std::stoi(input.substr(pos + 1, crlf_pos - (pos + 1)));
     } catch (...) {
         return false;
     }
@@ -90,6 +86,7 @@ bool RedisServer::isCompleteCommand(const std::string& input, size_t& cmd_len) {
 void RedisServer::closeClient(size_t poll_index) {
     if (poll_index >= fds.size()) return;
     int fd = fds[poll_index].fd;
+    PubSubManager::getInstance().unsubscribeAll(fd);
     close(fd);
     clients.erase(fd);
     fds.erase(fds.begin() + poll_index);
@@ -126,7 +123,7 @@ bool RedisServer::handleClientData(size_t poll_index, RedisCommandHandler& handl
         std::string request = ctx.in_buffer.substr(0, cmd_len);
         ctx.in_buffer.erase(0, cmd_len);
 
-        std::string response = handler.processCommand(request);
+        std::string response = handler.processCommand(request, client_fd);
         ssize_t sent = send(client_fd, response.c_str(), response.size(), 0);
         if (sent <= 0) {
             closeClient(poll_index);

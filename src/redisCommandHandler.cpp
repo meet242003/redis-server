@@ -1,5 +1,6 @@
 #include "../include/redisCommandHandler.h"
 #include "../include/redisDatabase.h"
+#include "../include/redisPubSub.h"
 #include <vector>
 #include <sstream>
 #include <algorithm>
@@ -25,33 +26,36 @@ std::vector<std::string> parseRespCommand(const std::string &input) {
         return tokens;
     }
 
-    // handle array
     size_t pos = 0;
-    if(input[pos] != '*') return tokens;
-    pos++;
-
     size_t crlf_pos = input.find("\r\n", pos);
-    if(crlf_pos == std::string::npos) return tokens; // Invalid 
+    if(crlf_pos == std::string::npos) return tokens;
 
-    int num_elements = std::stoi(input.substr(pos, crlf_pos - pos));
-    pos = crlf_pos + 2;
-
+    int num_elements = 0;
     try {
-        for(int i = 0; i < num_elements; ++i) {
-            if(pos >= input.length() || input[pos] != '$') break; // Invalid 
-            pos++;
-            crlf_pos = input.find("\r\n", pos);
-            if(crlf_pos == std::string::npos) break; // Invalid 
-            int string_len = std::stoi(input.substr(pos, crlf_pos - pos));
-            pos = crlf_pos + 2;
-            if(pos + string_len + 2 > input.length()) break; //Invalid
-            std::string token = input.substr(pos, string_len);
-            tokens.push_back(token);
-            pos += string_len + 2;
-        }
-    } catch (const std::exception&) {
-        // Return parsed tokens so far if exception occurred
+        num_elements = std::stoi(input.substr(pos + 1, crlf_pos - (pos + 1)));
+    } catch (...) {
+        return tokens;
     }
+
+    pos = crlf_pos + 2;
+    for(int i = 0; i < num_elements; ++i) {
+        if(pos >= input.size() || input[pos] != '$') break;
+        crlf_pos = input.find("\r\n", pos);
+        if(crlf_pos == std::string::npos) break;
+
+        int string_len = 0;
+        try {
+            string_len = std::stoi(input.substr(pos + 1, crlf_pos - (pos + 1)));
+        } catch (...) {
+            break;
+        }
+
+        pos = crlf_pos + 2;
+        if(pos + string_len > input.size()) break;
+        tokens.push_back(input.substr(pos, string_len));
+        pos += string_len + 2; // skip string and CRLF
+    }
+
     return tokens;
 }
 
@@ -59,7 +63,7 @@ RedisCommandHandler::RedisCommandHandler() {
 
 }
 
-std::string RedisCommandHandler::processCommand(const std::string& commandLine) {
+std::string RedisCommandHandler::processCommand(const std::string& commandLine, int client_fd) {
     // Use RESP parser
     auto tokens = parseRespCommand(commandLine);
     if (tokens.empty()) return "-Error: Empty command\r\n";
@@ -69,6 +73,14 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
     std::ostringstream response;
     // connect to database
     RedisDatabase& db = RedisDatabase::getInstance();
+
+    if (client_fd != -1 && PubSubManager::getInstance().isSubscribed(client_fd)) {
+        if (cmd == "PING") {
+            return "*2\r\n$4\r\npong\r\n$0\r\n\r\n";
+        } else if (cmd != "SUBSCRIBE" && cmd != "UNSUBSCRIBE" && cmd != "QUIT") {
+            return "-ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT allowed in this context\r\n";
+        }
+    }
 
     if (cmd == "PING") {
         response << "+PONG\r\n";
@@ -506,6 +518,57 @@ std::string RedisCommandHandler::processCommand(const std::string& commandLine) 
         } else {
             size_t card = db.zcard(tokens[1]);
             response << ":" << card << "\r\n";
+        }
+    } else if (cmd == "SUBSCRIBE") {
+        if (tokens.size() < 2) {
+            response << "-ERROR: SUBSCRIBE requires at least one channel\r\n";
+        } else if (client_fd == -1) {
+            response << "-ERROR: client fd not available for subscription\r\n";
+        } else {
+            for (size_t i = 1; i < tokens.size(); ++i) {
+                const std::string& channel = tokens[i];
+                int count = PubSubManager::getInstance().subscribe(client_fd, channel);
+                response << "*3\r\n"
+                         << "$9\r\nsubscribe\r\n"
+                         << "$" << channel.size() << "\r\n" << channel << "\r\n"
+                         << ":" << count << "\r\n";
+            }
+        }
+    } else if (cmd == "UNSUBSCRIBE") {
+        if (client_fd == -1) {
+            response << "-ERROR: client fd not available for subscription\r\n";
+        } else if (tokens.size() < 2) {
+            auto unsubs = PubSubManager::getInstance().unsubscribeAll(client_fd);
+            if (unsubs.empty()) {
+                response << "*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n";
+            } else {
+                for (const auto& pair : unsubs) {
+                    const std::string& channel = pair.first;
+                    int count = pair.second;
+                    response << "*3\r\n"
+                             << "$11\r\nunsubscribe\r\n"
+                             << "$" << channel.size() << "\r\n" << channel << "\r\n"
+                             << ":" << count << "\r\n";
+                }
+            }
+        } else {
+            for (size_t i = 1; i < tokens.size(); ++i) {
+                const std::string& channel = tokens[i];
+                int count = PubSubManager::getInstance().unsubscribe(client_fd, channel);
+                response << "*3\r\n"
+                         << "$11\r\nunsubscribe\r\n"
+                         << "$" << channel.size() << "\r\n" << channel << "\r\n"
+                         << ":" << count << "\r\n";
+            }
+        }
+    } else if (cmd == "PUBLISH") {
+        if (tokens.size() < 3) {
+            response << "-ERROR: PUBLISH requires a channel and a message\r\n";
+        } else {
+            const std::string& channel = tokens[1];
+            const std::string& message = tokens[2];
+            int receivers = PubSubManager::getInstance().publish(channel, message);
+            response << ":" << receivers << "\r\n";
         }
     } else {
         response << "-ERROR: Unknown command '" << cmd << "'\r\n";
